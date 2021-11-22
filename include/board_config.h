@@ -13,7 +13,8 @@
 #include "stm32f1xx_ll_dma.h"
 #include "stm32f1xx_ll_gpio.h"
 
-#define SYSCLOCK 72000000U // максимальная частота контроллера Bluepill
+#define SYSCLOCK     72000000U // максимальная частота контроллера Bluepill
+#define CAN_BITRATE  1000000U  // скорость передачи данных по шине CAN
 
 namespace board
 {
@@ -55,7 +56,7 @@ namespace board
 	}
 
 	/** Общая конфигурация системы: включение тактирования AFIO, настройка портов для прошивания,
-	 * вызов функции настройки частоты тактирования на 72 МГц. 
+	 * вызов функции настройки частоты тактирования на 72 МГц.
 	 */
 	void system_config(void)
 	{
@@ -104,13 +105,12 @@ namespace board
 		// PB8   ------> CAN_RX
 		// PB9   ------> CAN_TX
 		/* CAN-RX
-		*/ 
+		 */
 		GPIO_InitStruct.Pin = LL_GPIO_PIN_8;
 		GPIO_InitStruct.Mode = LL_GPIO_MODE_FLOATING;
 		LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
 		/* CAN-TX
-		*/
+		 */
 		GPIO_InitStruct.Pin = LL_GPIO_PIN_9;
 		GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
 		GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
@@ -119,6 +119,13 @@ namespace board
 
 		/**/
 		__HAL_AFIO_REMAP_CAN1_2();
+	}
+	/** Enable the clock of the CAN peripheral 
+    */
+	void bxCAN_clock_enable()
+	{
+		SET_BIT(RCC->APB1ENR, RCC_APB1ENR_CAN1EN);
+		// Предполагается, что для libcanard остальные настройки будут сделаны в bxCAN.h
 	}
 
 } // namespace board
