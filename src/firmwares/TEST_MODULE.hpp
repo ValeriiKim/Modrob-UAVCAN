@@ -15,6 +15,9 @@
 #include "o1heap.h"
 #include "bxcan.h"
 
+#include "cQueue.h"
+// #include <queue>
+
 // Заголовочники DSDL (uavcan namespace)
 #include "uavcan/node/Heartbeat_1_0.h"
 
@@ -26,11 +29,28 @@
 
 #define USEC_IN_SEC 1000000 // секунда выраженная в мкс
 
-// размер кучи для работы O1Heap в килобайтах
+// размер кучи для работы O1Heap в байтах
 #define HEAP_SIZE 4096
 
 O1HeapInstance *o1heap_ins;
 uint8_t _base[HEAP_SIZE] __attribute__((aligned(O1HEAP_ALIGNMENT))); // Create pointer to the memory arena for the HEAP
+
+struct CAN_message
+{
+	uint64_t microseconds;
+	uint32_t extended_can_id;
+	size_t payload_size = CANARD_MTU_CAN_CLASSIC;
+	uint8_t payload[CANARD_MTU_CAN_CLASSIC] = {0};
+
+	CAN_message()
+	{
+		microseconds = 0;
+		extended_can_id = 0;
+		payload_size = CANARD_MTU_CAN_CLASSIC;
+	}
+};
+
+Queue_t canrx_queue;
 
 static void *memAllocate(CanardInstance *const ins, const size_t amount)
 {
@@ -48,8 +68,8 @@ int32_t publish_heartbeat(CanardInstance *const canard, const uavcan_node_Heartb
 {
 	static CanardTransferID transfer_id = 0;
 	uint8_t payload[uavcan_node_Heartbeat_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_] = {0};
-	size_t buffer_size_bytes = uavcan_node_Heartbeat_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_;
-	if (uavcan_node_Heartbeat_1_0_serialize_(hb, payload, &buffer_size_bytes) < NUNAVUT_SUCCESS)
+	size_t inout_buffer_size_bytes = uavcan_node_Heartbeat_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_;
+	if (uavcan_node_Heartbeat_1_0_serialize_(hb, payload, &inout_buffer_size_bytes) < NUNAVUT_SUCCESS)
 	{
 		return -1; // произошла ошибка сериализации
 	}
@@ -61,14 +81,14 @@ int32_t publish_heartbeat(CanardInstance *const canard, const uavcan_node_Heartb
 			uavcan_node_Heartbeat_1_0_FIXED_PORT_ID_,
 			CANARD_NODE_ID_UNSET,
 			transfer_id,
-			buffer_size_bytes, // sizeof(payload),
+			inout_buffer_size_bytes, // sizeof(payload),
 			&payload[0],
 		};
 	++transfer_id;
 	int32_t result = canardTxPush(canard, &transfer);
 	if (result < 0)
 	{
-		usart2::usart_send_string("Tranfer error!\n");
+		usart2::usart_send_string("Transfer error!\n");
 		// An error has occurred: either an argument is invalid or we've ran out of memory.
 		// It is possible to statically prove that an out-of-memory will never occur for a given application if the
 		// heap is sized correctly; for background, refer to the Robson's Proof and the documentation for O1Heap.
@@ -76,8 +96,27 @@ int32_t publish_heartbeat(CanardInstance *const canard, const uavcan_node_Heartb
 	}
 }
 
-void send_transmission_queue(CanardInstance *const canard, uint64_t micros)
+void process_received_transfer(const CanardTransfer *transfer)
 {
+	if ((transfer->transfer_kind == CanardTransferKindMessage) &&
+		(transfer->port_id == uavcan_node_Heartbeat_1_0_FIXED_PORT_ID_))
+	{
+		uavcan_node_Heartbeat_1_0 hb_remote;
+		size_t inout_buffer_size_bytes = transfer->payload_size;
+		int res = uavcan_node_Heartbeat_1_0_deserialize_(&hb_remote, (uint8_t *)(transfer->payload), &inout_buffer_size_bytes);
+		// GREEN_LED_ON;
+		// GREEN_LED_OFF;
+		usart2::usart_send_int(hb_remote.vendor_specific_status_code, true);
+		if (res < 0)
+		{
+			// usart2::usart_send_string("HERE!\n");
+		}
+	}
+}
+
+void send_transmission_queue(CanardInstance *const canard)
+{
+	uint64_t micros = timer2::get_micros();
 	for (const CanardFrame *txf = NULL; (txf = canardTxPeek(canard)) != NULL;) // Look at the top of the TX queue.
 	{
 		if ((0U == txf->timestamp_usec) || (txf->timestamp_usec > micros)) // Check the deadline.
@@ -93,6 +132,63 @@ void send_transmission_queue(CanardInstance *const canard, uint64_t micros)
 				canard->memory_free(canard, (CanardFrame *)txf); // Remove the frame from the queue after it's transmitted.
 			}
 		}
+	}
+}
+
+void receive_transfers(CanardInstance *const canard)
+{
+	// uint32_t extended_can_id;
+	// size_t payload_size;
+	// uint8_t payload[8];
+
+	// bool get_frame = bxCANPop(0,
+	// 						  &extended_can_id,
+	// 						  &payload_size,
+	// 						  payload);
+	// if (!get_frame)
+	// {
+	// 	return;
+	// }
+	// CanardFrame rxf = {timer2::get_micros(), extended_can_id, payload_size, payload};
+	CAN_message can_msg;
+	CanardFrame rxf;
+	CanardTransfer transfer;
+	if (q_isEmpty(&canrx_queue))
+	{
+		return;
+	}
+	// __disable_irq();
+	CLEAR_BIT(CAN1->IER, CAN_IER_FMPIE0 | CAN_IER_FMPIE1);
+	q_pop(&canrx_queue, &can_msg);
+	SET_BIT(CAN1->IER, CAN_IER_FMPIE0 | CAN_IER_FMPIE1);
+	// __enable_irq();
+	rxf.extended_can_id = can_msg.extended_can_id;
+	rxf.payload = can_msg.payload;
+	rxf.payload_size = can_msg.payload_size;
+	rxf.timestamp_usec = can_msg.microseconds;
+
+	const int8_t result = canardRxAccept2(canard, &rxf, 0, &transfer, NULL);
+	if (result < 0)
+	{
+		usart2::usart_send_string("HERE!!!\n");
+		// An error has occurred: either an argument is invalid or we've ran out of memory.
+		return;
+	}
+	else if (result == 1)
+	{
+		// usart2::usart_send_string("HERE!\n");
+		GREEN_LED_ON;
+		GREEN_LED_OFF;
+		process_received_transfer(&transfer);
+		canard->memory_free(canard, (void *)transfer.payload);
+	}
+	else
+	{
+		uint8_t *check = (uint8_t *)rxf.payload;
+		uint8_t check_var = *check;
+		usart2::usart_send_int(check_var, true);
+		// GREEN_LED_ON;
+		// GREEN_LED_OFF;
 	}
 }
 
@@ -117,48 +213,50 @@ int main()
 	{
 		usart2::usart_send_string("Can't configure bxCAN!\n");
 	}
+	board::bxCAN_interrupts_enable();
 	usart2::usart_send_string("bxCAN controller initialized and started\n");
+	q_init(&canrx_queue, sizeof(CAN_message), 16, FIFO, true);
 
 	GREEN_LED_OFF;
 	TESTPIN_OFF;
 
 	o1heap_ins = o1heapInit(_base, HEAP_SIZE);
-
 	CanardInstance canard_ins = canardInit(&memAllocate, &memFree);
 	canard_ins.mtu_bytes = CANARD_MTU_CAN_CLASSIC; // Here we use classic CAN
 	canard_ins.node_id = MODULE_ID;				   // Set equal to MODULE_ID which is edited in platformio.ini
 
 	uint64_t prev_time = timer2::get_micros();
-	// uavcan_node_Heartbeat_1_0 hb;
-	// hb.uptime = timer2::get_micros() / USEC_IN_SEC;
-	// hb.health.value = uavcan_node_Health_1_0_NOMINAL;
-	// hb.mode.value = uavcan_node_Mode_1_0_OPERATIONAL;
-	// hb.vendor_specific_status_code = 0x23;
 
 	uavcan_node_Heartbeat_1_0 hb =
-	{
-		timer2::get_micros() / USEC_IN_SEC,
-		uavcan_node_Health_1_0_NOMINAL,
-		uavcan_node_Mode_1_0_OPERATIONAL,
-		0x23U,
-	};
+		{
+			timer2::get_micros() / USEC_IN_SEC,
+			uavcan_node_Health_1_0_NOMINAL,
+			uavcan_node_Mode_1_0_OPERATIONAL,
+			12, // max FF (255)
+		};
+	static CanardRxSubscription heartbeat_subscription;
+	(void)canardRxSubscribe(&canard_ins,
+							CanardTransferKindMessage,
+							uavcan_node_Heartbeat_1_0_FIXED_PORT_ID_,
+							12,
+							CANARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+							&heartbeat_subscription);
 
 	while (1)
 	{
-		// usart2::usart_send_float(var0.get(), 1);
 		hb.uptime = timer2::get_micros() / USEC_IN_SEC;
-		hb.health.value = uavcan_node_Health_1_0_CAUTION;
-		hb.mode.value = uavcan_node_Mode_1_0_SOFTWARE_UPDATE;
-		hb.vendor_specific_status_code = 0x23;
-		
+		// hb.health.value = uavcan_node_Health_1_0_NOMINAL;
+		// hb.mode.value = uavcan_node_Mode_1_0_OPERATIONAL;
+		// hb.vendor_specific_status_code = 12;
+
 		if ((timer2::get_micros() - prev_time) > USEC_IN_SEC)
 		{
 			publish_heartbeat(&canard_ins, &hb, timer2::get_micros());
 			prev_time = timer2::get_micros();
 		}
-		send_transmission_queue(&canard_ins, timer2::get_micros());
+		send_transmission_queue(&canard_ins);
+		receive_transfers(&canard_ins);
 	}
-
 	return 0;
 }
 
@@ -186,13 +284,18 @@ extern "C"
 }
 
 /** Обработчик прерывания по приёму CAN фреймов, прерывание происходит, когда
- * в FIFO0 появляется хотя бы одно сообщение. Здесь происходит чтение сообщения */
+ * в FIFO0 или FIFO1 появляется хотя бы одно сообщение. Здесь происходит чтение сообщения */
 extern "C"
 {
 	void USB_LP_CAN1_RX0_IRQHandler(void)
 	{
-		if (CAN1->RF0R & CAN_RF0R_FMP0) // FMP0 > 0?
+		if ((CAN1->RF0R & CAN_RF0R_FMP0) || (CAN1->RF1R & CAN_RF1R_FMP1)) // FMP0 > 0?
 		{
+			CAN_message can_msg;
+			bxCANPop(0, &can_msg.extended_can_id, &can_msg.payload_size, can_msg.payload);
+			can_msg.microseconds = timer2::get_micros();
+			q_push(&canrx_queue, &can_msg);
+
 		}
 	}
 }

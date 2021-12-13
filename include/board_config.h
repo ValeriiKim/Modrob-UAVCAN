@@ -13,8 +13,8 @@
 #include "stm32f1xx_ll_dma.h"
 #include "stm32f1xx_ll_gpio.h"
 
-#define SYSCLOCK     72000000U // максимальная частота контроллера Bluepill
-#define CAN_BITRATE  1000000U  // скорость передачи данных по шине CAN
+#define SYSCLOCK 72000000U	 // максимальная частота контроллера Bluepill
+#define CAN_BITRATE 1000000U // скорость передачи данных по шине CAN
 
 namespace board
 {
@@ -120,12 +120,20 @@ namespace board
 		/**/
 		__HAL_AFIO_REMAP_CAN1_2();
 	}
-	/** Enable the clock of the CAN peripheral 
-    */
+	/** Enable the clock of the CAN peripheral
+	 */
 	void bxCAN_clock_enable()
 	{
 		SET_BIT(RCC->APB1ENR, RCC_APB1ENR_CAN1EN);
 		// Предполагается, что для libcanard остальные настройки будут сделаны в bxCAN.h
+	}
+
+	void bxCAN_interrupts_enable()
+	{
+		NVIC_SetPriority(USB_LP_CAN1_RX0_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 4, 0));
+		NVIC_EnableIRQ(USB_LP_CAN1_RX0_IRQn);
+		//  Interrupt generated when get new frame in FIFO0 or FIFO1
+		CAN1->IER |= CAN_IER_FMPIE0 | CAN_IER_FMPIE1; 
 	}
 
 } // namespace board
