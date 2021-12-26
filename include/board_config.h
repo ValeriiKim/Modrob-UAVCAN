@@ -57,6 +57,7 @@ namespace board
 
 	/** Общая конфигурация системы: включение тактирования AFIO, настройка портов для прошивания,
 	 * вызов функции настройки частоты тактирования на 72 МГц.
+	 * Включение прерываний для CAN
 	 */
 	void system_config(void)
 	{
@@ -72,6 +73,9 @@ namespace board
 		LL_GPIO_AF_Remap_SWJ_NOJTAG();
 
 		system_clock_config();
+
+		NVIC_SetPriority(USB_LP_CAN1_RX0_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 4, 0));
+		NVIC_EnableIRQ(USB_LP_CAN1_RX0_IRQn);
 	}
 
 	void GPIO_Init(void)
@@ -130,10 +134,13 @@ namespace board
 
 	void bxCAN_interrupts_enable()
 	{
-		NVIC_SetPriority(USB_LP_CAN1_RX0_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 4, 0));
-		NVIC_EnableIRQ(USB_LP_CAN1_RX0_IRQn);
 		//  Interrupt generated when get new frame in FIFO0 or FIFO1
-		CAN1->IER |= CAN_IER_FMPIE0 | CAN_IER_FMPIE1; 
+		SET_BIT(CAN1->IER, CAN_IER_FMPIE0 | CAN_IER_FMPIE1); 
+	}
+
+	void bxCAN_interrupts_disable()
+	{
+		CLEAR_BIT(CAN1->IER, CAN_IER_FMPIE0 | CAN_IER_FMPIE1);
 	}
 
 } // namespace board
