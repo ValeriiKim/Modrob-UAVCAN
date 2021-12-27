@@ -46,7 +46,7 @@ public:
     {
         o1heap_ins = o1heapInit(_base, HEAP_SIZE);
         canard_ins = canardInit(&memAllocate, &memFree);
-        canard_ins.mtu_bytes = payload_size;
+        tx_queue = canardTxInit(100, payload_size);
         canard_ins.node_id = nodeID; // Set equal to MODULE_ID which is edited in platformio.ini
         q_init(&canrx_queue, sizeof(CAN_message), 32, FIFO, true);
     }
@@ -75,9 +75,9 @@ public:
         return res;
     }
 
-    bool receive_transfers(std::function<void(const CanardTransfer *transfer)> process_transfer)
+    bool receive_transfers(std::function<void(const CanardRxTransfer *transfer)> process_transfer)
     {
-        CanardTransfer transfer;
+        CanardRxTransfer transfer;
         while (not q_isEmpty(&canrx_queue))
         {
             CAN_message can_msg;
@@ -88,12 +88,11 @@ public:
             rxf.extended_can_id = can_msg.extended_can_id;
             rxf.payload = can_msg.payload;
             rxf.payload_size = can_msg.payload_size;
-            rxf.timestamp_usec = can_msg.microseconds;
-            const int8_t res = canardRxAccept2(&canard_ins, &rxf, 0, &transfer, NULL);
+            const int8_t res = canardRxAccept(&canard_ins, can_msg.microseconds, &rxf, 0, &transfer, NULL);
             if (res == 1)
             {
                 process_transfer(&transfer);
-                canard_ins.memory_free(&canard_ins, (void *)transfer.payload);
+                canard_ins.memory_free(&canard_ins, transfer.payload);
             }
             else if (res < 0)
             {
@@ -107,32 +106,27 @@ public:
         return true;
     }
 
-    bool send_transmission_queue(uint64_t micros)
+    void send_transmission_queue(uint64_t micros)
     {
-        for (const CanardFrame *txf = NULL; (txf = canardTxPeek(&canard_ins)) != NULL;) // Look at the top of the TX queue.
+        for (const CanardTxQueueItem *item = NULL; (item = canardTxPeek(&tx_queue)) != NULL;) // Look at the top of the TX queue.
         {
-            if ((0U == txf->timestamp_usec) || (txf->timestamp_usec > micros)) // Check the deadline.
+            if ((0U == item->tx_deadline_usec) || (item->tx_deadline_usec > micros)) // Check the deadline.
             {
-                if (bxCANPush(0,
+                if (not bxCANPush(0,
                               micros,
-                              txf->timestamp_usec,
-                              txf->extended_can_id,
-                              txf->payload_size,
-                              txf->payload))
+                              item->tx_deadline_usec,
+                              item->frame.extended_can_id,
+                              item->frame.payload_size,
+                              item->frame.payload))
                 {
-                    canardTxPop(&canard_ins);
-                    canard_ins.memory_free(&canard_ins, (CanardFrame *)txf); // Remove the frame from the queue after it's transmitted.
-                }
-                else
-                {
-                    return false;
+                    break; // If the driver is busy, break and retry later.
                 }
             }
+            canard_ins.memory_free(&canard_ins, canardTxPop(&tx_queue, item));
         }
-        return true;
     }
 
-    bool enqueue_transfer(const CanardMicrosecond timestamp_us,
+    bool enqueue_transfer(const CanardMicrosecond tx_deadline_us,
                           const CanardPriority priority,
                           const CanardTransferKind transfer_kind,
                           const CanardPortID port_id,
@@ -141,18 +135,20 @@ public:
                           const size_t payload_size,
                           const void *payload)
     {
-        const CanardTransfer transfer =
+        const CanardTransferMetadata transfer_metadata =
             {
-                /* .timestamp_usec = */ timestamp_us,
                 /* .priority       = */ priority,
                 /* .transfer_kind  = */ transfer_kind,
                 /* .port_id        = */ port_id,
                 /* .remote_node_id = */ remote_node_id,
                 /* .transfer_id    = */ transfer_id,
-                /* .payload_size   = */ payload_size,
-                /* .payload        = */ payload,
             };
-        int32_t result = canardTxPush(&canard_ins, &transfer);
+        int32_t result = canardTxPush(&tx_queue,
+                                      &canard_ins,
+                                      tx_deadline_us,
+                                      &transfer_metadata,
+                                      payload_size,
+                                      payload);
         bool const success = (result >= 0);
         return success;
     }
@@ -193,6 +189,7 @@ private:
     uint8_t _base[HEAP_SIZE] __attribute__((aligned(O1HEAP_ALIGNMENT))); // Create pointer to the memory arena for the HEAP
     Queue_t canrx_queue;                                                 // queue for recieved CAN frames
     CanardInstance canard_ins;
+    CanardTxQueue tx_queue;
     std::function<void()> enable_CAN_interrupts;
     std::function<void()> disable_CAN_interrupts;
 };

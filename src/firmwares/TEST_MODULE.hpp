@@ -7,20 +7,18 @@
 // Библиотеки микроконтроллера
 #include "board_config.h"
 #include "usart_dma_config.h"
-// #include "can_config.h"
 #include "timer2.h"
 
-// Библиотеки протокола, o1heap и bxcan
+// Библиотеки протокола, o1heap
 #include "canard.h"
 #include "o1heap.h"
-#include "bxcan.h"
-
 #include "cQueue.h"
-// #include "modrob_uavcan_can.hpp"
+
+// Thin layer above canard and bxcan
+#include "modrob_uavcan_node.hpp"
 
 // Заголовочники DSDL (uavcan namespace)
 #include "uavcan/node/Heartbeat_1_0.h"
-#include "modrob_uavcan_node.hpp"
 
 // Макросы для дебага
 #define GREEN_LED_ON SET_BIT(GPIOC->BSRR, GPIO_BSRR_BR13);
@@ -30,12 +28,13 @@
 
 constexpr uint32_t USEC_IN_SEC = 1000000; // секунда выраженная в мкс
 
-int32_t publish_heartbeat(const uavcan_node_Heartbeat_1_0 *const hb, uint64_t micros);
+bool publish_heartbeat(const uavcan_node_Heartbeat_1_0 *const hb, uint64_t micros);
 
-void process_received_transfer(const CanardTransfer *transfer)
+void process_received_transfer(const CanardRxTransfer *transfer)
 {
-	if ((transfer->transfer_kind == CanardTransferKindMessage) &&
-		(transfer->port_id == uavcan_node_Heartbeat_1_0_FIXED_PORT_ID_))
+	
+	if ((transfer->metadata.transfer_kind == CanardTransferKindMessage) &&
+		(transfer->metadata.port_id == uavcan_node_Heartbeat_1_0_FIXED_PORT_ID_))
 	{
 		uavcan_node_Heartbeat_1_0 hb_remote;
 		size_t inout_buffer_size_bytes = transfer->payload_size;
@@ -76,7 +75,7 @@ int main()
 			timer2::get_micros() / USEC_IN_SEC,
 			uavcan_node_Health_1_0_NOMINAL,
 			uavcan_node_Mode_1_0_OPERATIONAL,
-			12, // max FF (255)
+			23, // max FF (255)
 		};
 
 	static CanardRxSubscription heartbeat_subscription;
@@ -89,13 +88,10 @@ int main()
 	while (1)
 	{
 		hb.uptime = timer2::get_micros() / USEC_IN_SEC;
-		// hb.health.value = uavcan_node_Health_1_0_NOMINAL;
-		// hb.mode.value = uavcan_node_Mode_1_0_OPERATIONAL;
-		// hb.vendor_specific_status_code = 12;
 
 		if ((timer2::get_micros() - prev_time) > USEC_IN_SEC)
 		{
-			publish_heartbeat(&hb, timer2::get_micros());
+			bool res = publish_heartbeat(&hb, timer2::get_micros());
 			prev_time = timer2::get_micros();
 		}
 		node.send_transmission_queue(timer2::get_micros());
@@ -104,14 +100,14 @@ int main()
 	return 0;
 }
 
-int32_t publish_heartbeat(const uavcan_node_Heartbeat_1_0 *const hb, uint64_t micros)
+bool publish_heartbeat(const uavcan_node_Heartbeat_1_0 *const hb, uint64_t micros)
 {
 	static CanardTransferID transfer_id = 0;
 	uint8_t payload[uavcan_node_Heartbeat_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_] = {0};
 	size_t inout_buffer_size_bytes = uavcan_node_Heartbeat_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_;
 	if (uavcan_node_Heartbeat_1_0_serialize_(hb, payload, &inout_buffer_size_bytes) < NUNAVUT_SUCCESS)
 	{
-		return -1; // произошла ошибка сериализации
+		return false; // произошла ошибка сериализации
 	}
 
 	bool res = node.enqueue_transfer(micros + 2 * USEC_IN_SEC,
