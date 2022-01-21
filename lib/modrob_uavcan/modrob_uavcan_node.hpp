@@ -27,6 +27,12 @@ struct CAN_message
     }
 };
 
+enum class Node_sync_state
+{
+    state_update = 0,
+    state_adjust = 1
+};
+
 O1HeapInstance *o1heap_ins;
 void *memAllocate(CanardInstance *const ins, const size_t amount)
 {
@@ -113,11 +119,11 @@ public:
             if ((0U == item->tx_deadline_usec) || (item->tx_deadline_usec > micros)) // Check the deadline.
             {
                 if (not bxCANPush(0,
-                              micros,
-                              item->tx_deadline_usec,
-                              item->frame.extended_can_id,
-                              item->frame.payload_size,
-                              item->frame.payload))
+                                  micros,
+                                  item->tx_deadline_usec,
+                                  item->frame.extended_can_id,
+                                  item->frame.payload_size,
+                                  item->frame.payload))
                 {
                     break; // If the driver is busy, break and retry later.
                 }
@@ -184,6 +190,39 @@ public:
         }
     }
 
+    /** Функция для подсчёта микросекунд реального времени, должна вызываться в прерывании таймера,
+     * которое происходит с периодом 1 мс. 
+    **/
+    inline void upcount_realtime()
+    {
+        micros_realtime += 1000;
+    }
+
+    inline uint64_t get_realtime()
+    {
+        return micros_realtime;
+    }
+
+    /** Функция принимающая сообщение uavcan.time.Synchronization, должна вызываться как можно ближе
+     * к коду, который принимает CAN фрейм с этим сообщением (то есть в прерывании по приёму фреймов)
+     **/
+    void handle_received_time_sync_message(uint64_t rx_monotonic_timestamp, 
+                                           uint64_t previous_transmission_timestamp_us)
+    {
+        if (state == Node_sync_state::state_adjust)
+        {
+            uint64_t local_time_phase_error = previous_rx_real_timestamp - previous_transmission_timestamp_us;
+            // TODO: adjust_time function
+            state = Node_sync_state::state_update;
+        }
+        else
+        {
+            previous_rx_real_timestamp = micros_realtime;
+            previous_rx_monotonic_timestamp = rx_monotonic_timestamp;
+            state = Node_sync_state::state_adjust;
+        }
+    }
+
 private:
     static constexpr size_t HEAP_SIZE = 4096;
     uint8_t _base[HEAP_SIZE] __attribute__((aligned(O1HEAP_ALIGNMENT))); // Create pointer to the memory arena for the HEAP
@@ -192,6 +231,11 @@ private:
     CanardTxQueue tx_queue;
     std::function<void()> enable_CAN_interrupts;
     std::function<void()> disable_CAN_interrupts;
+
+    uint64_t micros_realtime = 0; // Milliseconds for realtime synchronization
+    Node_sync_state state = Node_sync_state::state_update;
+    uint64_t previous_rx_real_timestamp = 0;
+    uint64_t previous_rx_monotonic_timestamp = 0;
 };
 
 #endif

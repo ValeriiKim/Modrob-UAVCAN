@@ -32,16 +32,15 @@ bool publish_heartbeat(const uavcan_node_Heartbeat_1_0 *const hb, uint64_t micro
 
 void process_received_transfer(const CanardRxTransfer *transfer)
 {
-	
+
 	if ((transfer->metadata.transfer_kind == CanardTransferKindMessage) &&
 		(transfer->metadata.port_id == uavcan_node_Heartbeat_1_0_FIXED_PORT_ID_))
 	{
 		uavcan_node_Heartbeat_1_0 hb_remote;
 		size_t inout_buffer_size_bytes = transfer->payload_size;
 		int res = uavcan_node_Heartbeat_1_0_deserialize_(&hb_remote, (uint8_t *)(transfer->payload), &inout_buffer_size_bytes);
-		GREEN_LED_ON;
-		GREEN_LED_OFF;
-		usart2::usart_send_int(hb_remote.vendor_specific_status_code, true);
+	
+		// usart2::usart_send_int(hb_remote.vendor_specific_status_code, true);
 		if (res < 0)
 		{
 			// usart2::usart_send_string("HERE!\n");
@@ -91,6 +90,7 @@ int main()
 
 		if ((timer2::get_micros() - prev_time) > USEC_IN_SEC)
 		{
+			// usart2::usart_send_int(node.get_realtime(), true);
 			bool res = publish_heartbeat(&hb, timer2::get_micros());
 			prev_time = timer2::get_micros();
 		}
@@ -140,6 +140,18 @@ extern "C"
 	void DMA1_Channel7_IRQHandler(void)
 	{
 		usart2::transfer_handler_irq();
+	}
+}
+
+extern "C"
+{
+	/* С каждым прерыванием увеличиваем счётчик переполнений */
+	void TIM2_IRQHandler()
+	{
+		GREEN_LED_ON;
+		timer2::tim2_upcount();
+		node.upcount_realtime();
+		GREEN_LED_OFF;
 	}
 }
 
