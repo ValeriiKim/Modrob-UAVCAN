@@ -4,14 +4,12 @@
 // Главная тестовая прошивка для отладки различной периферии и протокола
 
 // Библиотеки микроконтроллера
-#include "board_config.h"
-#include "usart_dma_config.h"
-#include "can_config.h"
-#include "timer2.h"
-
-
+// #include "board_config.h"
+// #include "usart_dma_config.h"
+// #include "can_config.h"
+// #include "timer2.h"
+#include "stm32f3xx_ll_gpio.h"
 // Библиотеки протокола
-
 
 
 // Макросы для дебага
@@ -23,14 +21,14 @@
 
 
 int main() {
-	board::system_config();
-	board::GPIO_Init();
-	usart2::usart2_init();
-	timer2::tim2_setup();
-	timer2::tim2_start();
+	// board::system_config();
+	// board::GPIO_Init();
+	// usart2::usart2_init();
+	// timer2::tim2_setup();
+	// timer2::tim2_start();
 
-    GREEN_LED_OFF;
-	TESTPIN_OFF;
+    // GREEN_LED_OFF;
+	// TESTPIN_OFF;
 
 	while(1) 
 	{
@@ -57,7 +55,7 @@ extern "C"
 {
 	void DMA1_Channel7_IRQHandler(void)
 	{
-		usart2::transfer_handler_irq();
+		// usart2::transfer_handler_irq();
 	}
 }
 
@@ -78,9 +76,9 @@ extern "C"
 {
 	void USB_LP_CAN1_RX0_IRQHandler(void)
 	{
-		if (CAN1->RF0R & CAN_RF0R_FMP0) // FMP0 > 0? 
-		{
-		}
+		// if (CAN1->RF0R & CAN_RF0R_FMP0) // FMP0 > 0? 
+		// {
+		// }
 	}
 }
 
