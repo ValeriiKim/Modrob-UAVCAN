@@ -44,6 +44,10 @@
         "ostream": "cpp",
         "sstream": "cpp",
         "streambuf": "cpp",
-        "cinttypes": "cpp"
+        "cinttypes": "cpp",
+        "main_definitions.hpp": "c",
+        "main.h": "cpp",
+        "timer2.h": "cpp",
+        "stm32f3xx_it.h": "c"
     }
 }
