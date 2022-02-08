@@ -24,14 +24,11 @@
 #include "gpio.h"
 #include "timer2.h"
 
-
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 void CAN_clk_gpio_init();
 
-
 extern TIM_HandleTypeDef htim3;
-
 
 int main(void)
 {
@@ -45,18 +42,20 @@ int main(void)
     /* Initialize all configured peripherals */
     MX_GPIO_Init();
     MX_DMA_Init();
-    MX_USART2_UART_Init();
+    usart2::USART2_UART_Init();
+    usart2::DMA_UART_LinkageInit();
     timer2::tim2_setup();
     timer2::tim2_start();
+    LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_9);
 
     while (1)
     {
-        /* USER CODE END WHILE */
-        LL_GPIO_SetOutputPin(GPIOC, LL_GPIO_PIN_9);
-        // HAL_UART_Transmit(&huart2, str, sizeof(str), 10);
-        UART_send_float(145, true);
-        LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_9);
-        /* USER CODE BEGIN 3 */
+        HAL_Delay(500);
+        // UART_send_float(timer2::get_micros() / 1000000.0, true);
+        if (usart2::temp_buffer[0] == 'a')
+        {
+            usart2::UART_send_string("dfdfdfdfd");
+        }
     }
     /* USER CODE END 3 */
 }
@@ -82,6 +81,7 @@ extern "C"
     void TIM2_IRQHandler(void)
     {
         timer2::tim2_upcount();
+        // UART_send_float(timer2::get_micros()/1000000.0, true);
     }
 }
 
@@ -92,7 +92,7 @@ extern "C"
   */
     void DMA1_Channel7_IRQHandler(void)
     {
-        HAL_DMA_IRQHandler(&hdma_usart2_tx);
+        usart2::transfer_handler_irq();
     }
 }
 
@@ -103,7 +103,9 @@ extern "C"
   */
     void USART2_IRQHandler(void)
     {
-        HAL_UART_IRQHandler(&huart2);
+        // LL_GPIO_SetOutputPin(GPIOC, LL_GPIO_PIN_9);
+        usart2::receive_handler_irq();
+        // LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_9);
     }
 }
 /**
@@ -157,8 +159,8 @@ void CAN_clk_gpio_init()
 
     __HAL_RCC_GPIOB_CLK_ENABLE();
     /**CAN GPIO Configuration
-    PB8     ------> CAN_RX
-    PB9     ------> CAN_TX
+    PB8------> CAN_RX
+    PB9------> CAN_TX
     */
     GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
