@@ -19,51 +19,20 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.hpp"
+#include "dma.h"
 #include "usart.h"
 #include "gpio.h"
 #include "timer2.h"
 
-/* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
-
-/* USER CODE END Includes */
-
-/* Private typedef -----------------------------------------------------------*/
-/* USER CODE BEGIN PTD */
-
-/* USER CODE END PTD */
-
-/* Private define ------------------------------------------------------------*/
-/* USER CODE BEGIN PD */
-/* USER CODE END PD */
-
-/* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
-
-/* Private variables ---------------------------------------------------------*/
-
-/* USER CODE BEGIN PV */
-
-/* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 void CAN_clk_gpio_init();
-/* USER CODE BEGIN PFP */
 
-/* USER CODE END PFP */
 
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
 extern TIM_HandleTypeDef htim3;
-/* USER CODE END 0 */
 
-/**
-  * @brief  The application entry point.
-  * @retval int
-  */
+
 int main(void)
 {
 
@@ -75,19 +44,18 @@ int main(void)
 
     /* Initialize all configured peripherals */
     MX_GPIO_Init();
+    MX_DMA_Init();
     MX_USART2_UART_Init();
     timer2::tim2_setup();
     timer2::tim2_start();
-    uint8_t str[] = "12345";
 
     while (1)
     {
         /* USER CODE END WHILE */
-        LL_GPIO_SetOutputPin(LD2_GPIO_Port, LD2_Pin);
-        HAL_Delay(500);
-        LL_GPIO_ResetOutputPin(LD2_GPIO_Port, LD2_Pin);
-        HAL_Delay(500);
-        
+        LL_GPIO_SetOutputPin(GPIOC, LL_GPIO_PIN_9);
+        // HAL_UART_Transmit(&huart2, str, sizeof(str), 10);
+        UART_send_float(145, true);
+        LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_9);
         /* USER CODE BEGIN 3 */
     }
     /* USER CODE END 3 */
@@ -113,12 +81,31 @@ extern "C"
   */
     void TIM2_IRQHandler(void)
     {
-        LL_GPIO_SetOutputPin(GPIOC, LL_GPIO_PIN_9);
         timer2::tim2_upcount();
-        LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_9);
     }
 }
 
+extern "C"
+{
+    /**
+  * @brief This function handles DMA1 channel7 global interrupt.
+  */
+    void DMA1_Channel7_IRQHandler(void)
+    {
+        HAL_DMA_IRQHandler(&hdma_usart2_tx);
+    }
+}
+
+extern "C"
+{
+    /**
+  * @brief This function handles USART2 global interrupt / USART2 wake-up interrupt through EXTI line 26.
+  */
+    void USART2_IRQHandler(void)
+    {
+        HAL_UART_IRQHandler(&huart2);
+    }
+}
 /**
   * @brief System Clock Configuration
   * @retval None
