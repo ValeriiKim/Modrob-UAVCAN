@@ -166,12 +166,25 @@ extern "C"
 }
 
 /** Обработчик прерывания по приёму CAN фреймов, прерывание происходит, когда
- * в FIFO0 или FIFO1 появляется хотя бы одно сообщение. Здесь происходит чтение сообщения */
+ * в FIFO0 появляется хотя бы одно сообщение. Здесь происходит чтение сообщения */
 extern "C"
 {
 	void USB_LP_CAN1_RX0_IRQHandler(void)
 	{
-		if ((CAN1->RF0R & CAN_RF0R_FMP0) || (CAN1->RF1R & CAN_RF1R_FMP1)) // FMP0 > 0 or FMP1 > 0?
+		if (CAN1->RF0R & CAN_RF0R_FMP0) // FMP0 > 0?
+		{
+			node.canard_IRQhandler(timer2::get_micros());
+		}
+	}
+}
+
+/** Обработчик прерывания по приёму CAN фреймов, прерывание происходит, когда
+ * в FIFO1 появляется хотя бы одно сообщение. Здесь происходит чтение сообщения */
+extern "C"
+{
+	void CAN1_RX1_IRQHandler(void)
+	{
+		if (CAN1->RF1R & CAN_RF1R_FMP1) // FMP1 > 0?
 		{
 			node.canard_IRQhandler(timer2::get_micros());
 		}

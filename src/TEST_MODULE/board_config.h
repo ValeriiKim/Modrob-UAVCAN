@@ -74,8 +74,14 @@ namespace board
 
 		system_clock_config();
 
+		// Прерывание по получению сообщения в FIFO0
+		// Установка приоритета и включение прерываний
 		NVIC_SetPriority(USB_LP_CAN1_RX0_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 4, 0));
 		NVIC_EnableIRQ(USB_LP_CAN1_RX0_IRQn);
+		// Прерывание по получению сообщения в FIFO1
+		// Установка приоритета и включение прерываний
+		NVIC_SetPriority(CAN1_RX1_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 4, 0));
+		NVIC_EnableIRQ(CAN1_RX1_IRQn);
 	}
 
 	void GPIO_Init(void)
