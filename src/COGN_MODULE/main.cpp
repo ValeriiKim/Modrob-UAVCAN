@@ -1,63 +1,162 @@
-/* USER CODE BEGIN Header */
-/**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * <h2><center>&copy; Copyright (c) 2022 STMicroelectronics.
-  * All rights reserved.</center></h2>
-  *
-  * This software component is licensed by ST under BSD 3-Clause license,
-  * the "License"; You may not use this file except in compliance with the
-  * License. You may obtain a copy of the License at:
-  *                        opensource.org/licenses/BSD-3-Clause
-  *
-  ******************************************************************************
-  */
-/* USER CODE END Header */
-/* Includes ------------------------------------------------------------------*/
+
+#define NUNAVUT_ASSERT(x) assert(x) // объявление макроса для работы serialization.h для DSDL
+
+// STM32F303RE drivers
 #include "main.hpp"
 #include "dma.h"
 #include "usart.h"
 #include "gpio.h"
 #include "timer2.h"
 
+// libcanard, o1heap and cQueue libs
+#include "canard.h"
+#include "o1heap.h"
+#include "cQueue.h"
+
+// Thin layer above canard and bxcan
+#include "modrob_uavcan_node.hpp"
+
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 void CAN_clk_gpio_init();
+void bxCAN_interrupts_enable();
+void bxCAN_interrupts_disable();
+
+// Заголовочники DSDL (uavcan namespace)
+#include "uavcan/node/Heartbeat_1_0.h"
+
+constexpr uint32_t USEC_IN_SEC = 1000000; // секунда выраженная в мкс
+
+bool publish_heartbeat(const uavcan_node_Heartbeat_1_0 *const hb, uint64_t micros);
+
+void process_received_transfer(const CanardRxTransfer *transfer)
+{
+
+    if ((transfer->metadata.transfer_kind == CanardTransferKindMessage) &&
+        (transfer->metadata.port_id == uavcan_node_Heartbeat_1_0_FIXED_PORT_ID_))
+    {
+        uavcan_node_Heartbeat_1_0 hb_remote;
+        size_t inout_buffer_size_bytes = transfer->payload_size;
+        int res = uavcan_node_Heartbeat_1_0_deserialize_(&hb_remote, (uint8_t *)(transfer->payload), &inout_buffer_size_bytes);
+        usart2::UART_send_float(hb_remote.vendor_specific_status_code, true);
+        if (res < 0)
+        {
+        }
+    }
+}
 
 extern TIM_HandleTypeDef htim3;
+UAVCAN_node node(MODULE_ID);
 
 int main(void)
 {
-
     /* MCU Configuration--------------------------------------------------------*/
-    /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
     HAL_Init();
-    /* Configure the system clock */
     SystemClock_Config();
-
-    /* Initialize all configured peripherals */
     MX_GPIO_Init();
+    CAN_clk_gpio_init();
     MX_DMA_Init();
     usart2::USART2_UART_Init();
     usart2::DMA_UART_LinkageInit();
     timer2::tim2_setup();
     timer2::tim2_start();
+
+    node.bxCAN_init(HAL_RCC_GetPCLK1Freq(), 1000000,
+                    bxCAN_interrupts_enable,
+                    bxCAN_interrupts_disable);
+    usart2::UART_send_string("All peripherals successfully inited");
     LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_9);
 
+    uint64_t prev_time = timer2::get_micros();
+
+    uavcan_node_Heartbeat_1_0 hb =
+        {
+            timer2::get_micros() / USEC_IN_SEC,
+            uavcan_node_Health_1_0_NOMINAL,
+            uavcan_node_Mode_1_0_OPERATIONAL,
+            23, // max FF (255)
+        };
+
+    static CanardRxSubscription heartbeat_subscription;
+    node.rx_subscribe(CanardTransferKindMessage,
+                      uavcan_node_Heartbeat_1_0_FIXED_PORT_ID_,
+                      12,
+                      CANARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+                      &heartbeat_subscription);
     while (1)
     {
-        HAL_Delay(500);
-        // UART_send_float(timer2::get_micros() / 1000000.0, true);
-        if (usart2::temp_buffer[0] == 'a')
+        hb.uptime = timer2::get_micros() / USEC_IN_SEC;
+
+        if ((timer2::get_micros() - prev_time) > USEC_IN_SEC)
         {
-            usart2::UART_send_string("dfdfdfdfd");
+            // usart2::usart_send_int(node.get_realtime(), true);
+            bool res = publish_heartbeat(&hb, timer2::get_micros());
+            prev_time = timer2::get_micros();
         }
+        node.send_transmission_queue(timer2::get_micros());
+        node.receive_transfers(&process_received_transfer);
     }
     /* USER CODE END 3 */
+}
+
+bool publish_heartbeat(const uavcan_node_Heartbeat_1_0 *const hb, uint64_t micros)
+{
+    static CanardTransferID transfer_id = 0;
+    uint8_t payload[uavcan_node_Heartbeat_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_] = {0};
+    size_t inout_buffer_size_bytes = uavcan_node_Heartbeat_1_0_SERIALIZATION_BUFFER_SIZE_BYTES_;
+    if (uavcan_node_Heartbeat_1_0_serialize_(hb, payload, &inout_buffer_size_bytes) < NUNAVUT_SUCCESS)
+    {
+        return false; // произошла ошибка сериализации
+    }
+
+    bool res = node.enqueue_transfer(micros + 2 * USEC_IN_SEC,
+                                     CanardPriorityNominal,
+                                     CanardTransferKindMessage,
+                                     uavcan_node_Heartbeat_1_0_FIXED_PORT_ID_,
+                                     CANARD_NODE_ID_UNSET,
+                                     transfer_id,
+                                     inout_buffer_size_bytes,
+                                     payload);
+    ++transfer_id;
+
+    if (!res)
+    {
+        usart2::UART_send_string("Transfer error!\n");
+        // An error has occurred: either an argument is invalid or we've ran out of memory.
+        // It is possible to statically prove that an out-of-memory will never occur for a given application if the
+        // heap is sized correctly; for background, refer to the Robson's Proof and the documentation for O1Heap.
+    }
+    return res;
+}
+
+/** Обработчик прерывания по приёму CAN фреймов, прерывание происходит, когда
+ * в FIFO0 появляется хотя бы одно сообщение. Здесь происходит чтение сообщения */
+extern "C"
+{
+    void USB_LP_CAN_RX0_IRQHandler(void)
+    {
+        // LL_GPIO_SetOutputPin(GPIOC, LL_GPIO_PIN_9);
+        if (CAN->RF0R & CAN_RF0R_FMP0) // FMP0 > 0
+        {
+            node.canard_IRQhandler(timer2::get_micros());
+        }
+        // LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_9);
+    }
+}
+
+/** Обработчик прерывания по приёму CAN фреймов, прерывание происходит, когда
+ * в FIFO1 появляется хотя бы одно сообщение. Здесь происходит чтение сообщения */
+extern "C"
+{
+    void CAN_RX1_IRQHandler(void)
+    {
+        LL_GPIO_SetOutputPin(GPIOC, LL_GPIO_PIN_9);
+        if (CAN->RF1R & CAN_RF1R_FMP1) // FMP1 > 0?
+        {
+            node.canard_IRQhandler(timer2::get_micros());
+        }
+        LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_9);
+    }
 }
 
 extern "C"
@@ -108,6 +207,7 @@ extern "C"
         // LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_9);
     }
 }
+
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -157,7 +257,7 @@ void CAN_clk_gpio_init()
     /* CAN clock enable */
     __HAL_RCC_CAN1_CLK_ENABLE();
 
-    __HAL_RCC_GPIOB_CLK_ENABLE();
+    // __HAL_RCC_GPIOB_CLK_ENABLE();
     /**CAN GPIO Configuration
     PB8------> CAN_RX
     PB9------> CAN_TX
@@ -168,6 +268,23 @@ void CAN_clk_gpio_init()
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF9_CAN;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    // Установка приоритета и включение прерывания по получению сообщения в FIFO0
+    NVIC_SetPriority(USB_LP_CAN_RX0_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 4, 0));
+	NVIC_EnableIRQ(USB_LP_CAN_RX0_IRQn);
+    // Установка приоритета и включение прерывания по получению сообщения в FIFO1
+    NVIC_SetPriority(CAN_RX1_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 4, 0));
+	NVIC_EnableIRQ(CAN_RX1_IRQn);
+}
+
+void bxCAN_interrupts_enable()
+{
+    //  Interrupt generated when get new frame in FIFO0 or FIFO1
+    SET_BIT(CAN->IER, CAN_IER_FMPIE0 | CAN_IER_FMPIE1);
+}
+
+void bxCAN_interrupts_disable()
+{
+    CLEAR_BIT(CAN->IER, CAN_IER_FMPIE0 | CAN_IER_FMPIE1);
 }
 
 /**
