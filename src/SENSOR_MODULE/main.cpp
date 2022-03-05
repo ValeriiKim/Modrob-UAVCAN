@@ -15,6 +15,7 @@
 
 // Thin layer above canard and bxcan
 #include "modrob_uavcan_node.hpp"
+#include "algorithm"
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
@@ -24,10 +25,12 @@ void bxCAN_interrupts_disable();
 
 // Заголовочники DSDL (uavcan namespace)
 #include "uavcan/node/Heartbeat_1_0.h"
+#include "modrob/sensor_module/sensor_data_0_1.h"
 
 constexpr uint32_t USEC_IN_SEC = 1000000; // секунда выраженная в мкс
 
 bool publish_heartbeat(const uavcan_node_Heartbeat_1_0 *const hb, uint64_t micros);
+bool publish_sensor_data(const modrob_sensor_module_sensor_data_0_1 *const sdata, uint64_t micros);
 
 void process_received_transfer(const CanardRxTransfer *transfer)
 {
@@ -68,6 +71,8 @@ int main(void)
     LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_9);
 
     uint64_t prev_time = timer2::get_micros();
+    uint64_t next_1_hz_timestep = USEC_IN_SEC;
+    uint64_t next_20_hz_timestep = 50000;
 
     uavcan_node_Heartbeat_1_0 hb =
         {
@@ -83,20 +88,143 @@ int main(void)
                       12,
                       CANARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
                       &heartbeat_subscription);
+
+    modrob_sensor_module_sensor_data_0_1 sensor_data = {};
+    sensor_data.cur_pos[0] = 0.2;
+    sensor_data.cur_pos[1] = 0.3;
+    sensor_data.obstacles.count = 10;
+    sensor_data.obstacles.elements[0].obst_pos[0] = 1;
+    sensor_data.obstacles.elements[0].obst_pos[1] = 1;
+    sensor_data.obstacles.elements[0].obst_vel[0] = -0.3;
+    sensor_data.obstacles.elements[0].obst_vel[1] = -0.2;
+    sensor_data.obstacles.elements[0].radius = 0.4;
+
+    sensor_data.obstacles.elements[1].obst_pos[0] = 1.5;
+    sensor_data.obstacles.elements[1].obst_pos[1] = 1;
+    sensor_data.obstacles.elements[1].obst_vel[0] = -0.6;
+    sensor_data.obstacles.elements[1].obst_vel[1] = -0.2;
+    sensor_data.obstacles.elements[1].radius = 0.3;
+
+    sensor_data.obstacles.elements[2].obst_pos[0] = 1;
+    sensor_data.obstacles.elements[2].obst_pos[1] = -1;
+    sensor_data.obstacles.elements[2].obst_vel[0] = -0.2;
+    sensor_data.obstacles.elements[2].obst_vel[1] = -0.2;
+    sensor_data.obstacles.elements[2].radius = 0.4;
+
+    sensor_data.obstacles.elements[3].obst_pos[0] = 1.5;
+    sensor_data.obstacles.elements[3].obst_pos[1] = 1.5;
+    sensor_data.obstacles.elements[3].obst_vel[0] = -0.5;
+    sensor_data.obstacles.elements[3].obst_vel[1] = -0.2;
+    sensor_data.obstacles.elements[3].radius = 0.2;
+
+    sensor_data.obstacles.elements[4].obst_pos[0] = 0.2;
+    sensor_data.obstacles.elements[4].obst_pos[1] = 1;
+    sensor_data.obstacles.elements[4].obst_vel[0] = -0.3;
+    sensor_data.obstacles.elements[4].obst_vel[1] = -0.2;
+    sensor_data.obstacles.elements[4].radius = 0.4;
+
+    sensor_data.obstacles.elements[5].obst_pos[0] = -1;
+    sensor_data.obstacles.elements[5].obst_pos[1] = -1;
+    sensor_data.obstacles.elements[5].obst_vel[0] = 0.3;
+    sensor_data.obstacles.elements[5].obst_vel[1] = 0.2;
+    sensor_data.obstacles.elements[5].radius = 0.4;
+
+    sensor_data.obstacles.elements[6].obst_pos[0] = -1;
+    sensor_data.obstacles.elements[6].obst_pos[1] = -1.5;
+    sensor_data.obstacles.elements[6].obst_vel[0] = 0.4;
+    sensor_data.obstacles.elements[6].obst_vel[1] = 0.2;
+    sensor_data.obstacles.elements[6].radius = 0.2;
+
+    sensor_data.obstacles.elements[7].obst_pos[0] = 1.8;
+    sensor_data.obstacles.elements[7].obst_pos[1] = 0;
+    sensor_data.obstacles.elements[7].obst_vel[0] = -0.3;
+    sensor_data.obstacles.elements[7].obst_vel[1] = -0.2;
+    sensor_data.obstacles.elements[7].radius = 0.4;
+
+    sensor_data.obstacles.elements[8].obst_pos[0] = -2;
+    sensor_data.obstacles.elements[8].obst_pos[1] = 0;
+    sensor_data.obstacles.elements[8].obst_vel[0] = 0.3;
+    sensor_data.obstacles.elements[8].obst_vel[1] = -0.2;
+    sensor_data.obstacles.elements[8].radius = 0.4;
+
+    sensor_data.obstacles.elements[9].obst_pos[0] = 0;
+    sensor_data.obstacles.elements[9].obst_pos[1] = -2;
+    sensor_data.obstacles.elements[9].obst_vel[0] = -0.3;
+    sensor_data.obstacles.elements[9].obst_vel[1] = -0.2;
+    sensor_data.obstacles.elements[9].radius = 0.4;
+
+    sensor_data.scanX.count = 100;
+    sensor_data.scanY.count = 100;
+    float scan_x[] = {2, 1.99606, 1.98425, 1.96461, 1.93723, 1.90221, 1.85969, 1.80984, 1.75286, 1.68896,
+                      1.61841, 1.54147, 1.45846, 1.3697, 1.27554, 1.17634, 1.07251, 0.964456, 0.852596, 0.737374,
+                      0.619245, 0.498675, 0.376139, 0.252119, 0.127106, 0.00159183, -0.123929, -0.248961, -0.373011, -0.495591,
+                      -0.616217, -0.734414, -0.849715, -0.961666, -1.06982, -1.17377, -1.27308, -1.36738, -1.45628, -1.53944,
+                      -1.61653, -1.68725, -1.75132, -1.80849, -1.85852, -1.90123, -1.93644, -1.96401, -1.98384, -1.99585, -2, -1.99625,
+                      -1.98464, -1.9652, -1.93802, -1.90319, -1.86086, -1.8112, -1.75439, -1.69067, -1.62028, -1.5435, -1.46064, -1.37202,
+                      -1.27799, -1.17892, -1.0752, -0.967249, -0.85548, -0.740338, -0.622277, -0.501764, -0.379271, -0.255284, -0.13029,
+                      -0.00478265, 0.120744, 0.245794, 0.369875, 0.492498, 0.61318, 0.731444, 0.846824, 0.958865, 1.06713, 1.17118, 1.27062,
+                      1.36504, 1.45409, 1.5374, 1.61465, 1.68554, 1.74978, 1.80712, 1.85734, 1.90023, 1.93563, 1.96341, 1.98344, 1.99565};
+    float scan_y[] = {0, 0.125517, 0.25054, 0.374575, 0.497133, 0.617731, 0.735894, 0.851155, 0.963061, 1.07117,
+                      1.17506, 1.27431, 1.36854, 1.45737, 1.54046, 1.61747, 1.68811, 1.75209, 1.80917, 1.85911,
+                      1.90172, 1.93683, 1.96431, 1.98405, 1.99596, 2, 1.99616, 1.98444, 1.96491, 1.93762, 1.9027, 1.86028,
+                      1.81052, 1.75362, 1.68981, 1.61934, 1.54249, 1.45955, 1.37086, 1.27676, 1.17763, 1.07386, 0.965851, 0.854037,
+                      0.738855, 0.62076, 0.500218, 0.377704, 0.253701, 0.128697, 0.00318653, -0.122337, -0.247378, -0.371444, -0.494045,
+                      -0.614699, -0.732929, -0.84827, -0.960266, -1.06848, -1.17247, -1.27185, -1.36621, -1.45518, -1.53842, -1.61559,
+                      -1.6864, -1.75055, -1.8078, -1.85793, -1.90073, -1.93604, -1.96371, -1.98364, -1.99575, -1.99999, -1.99635, -1.98484,
+                      -1.9655, -1.93841, -1.90368, -1.86145, -1.81187, -1.75516, -1.69152, -1.62121, -1.54452, -1.46173, -1.37318, -1.27922,
+                      -1.18021, -1.07655, -0.968645, -0.856922, -0.74182, -0.623794, -0.503308, -0.380838, -0.256867, -0.131883};
+    std::copy(scan_x, scan_x + 100, sensor_data.scanX.elements);
+    std::copy(scan_y, scan_y + 100, sensor_data.scanY.elements);
     while (1)
     {
         hb.uptime = timer2::get_micros() / USEC_IN_SEC;
 
-        if ((timer2::get_micros() - prev_time) > USEC_IN_SEC)
+        if (timer2::get_micros() >= next_1_hz_timestep)
         {
+            next_1_hz_timestep += USEC_IN_SEC;
             // usart2::usart_send_int(node.get_realtime(), true);
             bool res = publish_heartbeat(&hb, timer2::get_micros());
-            prev_time = timer2::get_micros();
+        }
+
+        if (timer2::get_micros() >= next_20_hz_timestep)
+        {
+            next_20_hz_timestep += 50000;
+            publish_sensor_data(&sensor_data, timer2::get_micros());
+            usart2::UART_send_string("OPA!");
         }
         node.send_transmission_queue(timer2::get_micros());
         node.receive_transfers(&process_received_transfer);
     }
     /* USER CODE END 3 */
+}
+
+bool publish_sensor_data(const modrob_sensor_module_sensor_data_0_1 *const sdata, uint64_t micros)
+{
+    static CanardTransferID transfer_id = 0;
+    uint8_t payload[modrob_sensor_module_sensor_data_0_1_SERIALIZATION_BUFFER_SIZE_BYTES_] = {0};
+    size_t inout_buffer_size_bytes = modrob_sensor_module_sensor_data_0_1_SERIALIZATION_BUFFER_SIZE_BYTES_;
+    if (modrob_sensor_module_sensor_data_0_1_serialize_(sdata, payload, &inout_buffer_size_bytes) < NUNAVUT_SUCCESS)
+    {
+        return false;
+        usart2::UART_send_string("Serialization error!\n");
+    }
+    bool res = node.enqueue_transfer(micros + 50000,
+                                     CanardPriorityNominal,
+                                     CanardTransferKindMessage,
+                                     150,
+                                     CANARD_NODE_ID_UNSET,
+                                     transfer_id,
+                                     inout_buffer_size_bytes,
+                                     payload);
+    ++transfer_id;
+    if (!res)
+    {
+        usart2::UART_send_string("Transfer sensor data error!\n");
+        // An error has occurred: either an argument is invalid or we've ran out of memory.
+        // It is possible to statically prove that an out-of-memory will never occur for a given application if the
+        // heap is sized correctly; for background, refer to the Robson's Proof and the documentation for O1Heap.
+    }
+    return res;
 }
 
 bool publish_heartbeat(const uavcan_node_Heartbeat_1_0 *const hb, uint64_t micros)
@@ -270,10 +398,10 @@ void CAN_clk_gpio_init()
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
     // Установка приоритета и включение прерывания по получению сообщения в FIFO0
     NVIC_SetPriority(USB_LP_CAN_RX0_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 4, 0));
-	NVIC_EnableIRQ(USB_LP_CAN_RX0_IRQn);
+    NVIC_EnableIRQ(USB_LP_CAN_RX0_IRQn);
     // Установка приоритета и включение прерывания по получению сообщения в FIFO1
     NVIC_SetPriority(CAN_RX1_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 4, 0));
-	NVIC_EnableIRQ(CAN_RX1_IRQn);
+    NVIC_EnableIRQ(CAN_RX1_IRQn);
 }
 
 void bxCAN_interrupts_enable()

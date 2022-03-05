@@ -74,7 +74,7 @@ int main()
 			timer2::get_micros() / USEC_IN_SEC,
 			uavcan_node_Health_1_0_NOMINAL,
 			uavcan_node_Mode_1_0_OPERATIONAL,
-			23, // max FF (255)
+			0xC5, // max FF (255)
 		};
 
 	static CanardRxSubscription heartbeat_subscription;

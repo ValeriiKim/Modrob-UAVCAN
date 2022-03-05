@@ -52,7 +52,7 @@ public:
     {
         o1heap_ins = o1heapInit(_base, HEAP_SIZE);
         canard_ins = canardInit(&memAllocate, &memFree);
-        tx_queue = canardTxInit(100, payload_size);
+        tx_queue = canardTxInit(500, payload_size);
         canard_ins.node_id = nodeID; // Set equal to MODULE_ID which is edited in platformio.ini
         q_init(&canrx_queue, sizeof(CAN_message), 32, FIFO, true);
     }
@@ -224,7 +224,7 @@ public:
     }
 
 private:
-    static constexpr size_t HEAP_SIZE = 4096;
+    static constexpr size_t HEAP_SIZE = 32768; //4096
     uint8_t _base[HEAP_SIZE] __attribute__((aligned(O1HEAP_ALIGNMENT))); // Create pointer to the memory arena for the HEAP
     Queue_t canrx_queue;                                                 // queue for recieved CAN frames
     CanardInstance canard_ins;

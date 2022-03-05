@@ -48,6 +48,7 @@
         "main_definitions.hpp": "c",
         "main.h": "cpp",
         "timer2.h": "cpp",
-        "stm32f3xx_it.h": "c"
+        "stm32f3xx_it.h": "c",
+        "*.uavcan": "cpp"
     }
 }
