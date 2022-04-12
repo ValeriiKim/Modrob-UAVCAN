@@ -1,6 +1,5 @@
-
 #define NUNAVUT_ASSERT(x) assert(x) // объявление макроса для работы serialization.h для DSDL
-
+#include <stdlib.h>
 // STM32F303RE drivers
 #include "main.hpp"
 #include "dma.h"
@@ -15,6 +14,7 @@
 
 // Thin layer above canard and bxcan
 #include "modrob_uavcan_node.hpp"
+
 #include "algorithm"
 
 /* Private function prototypes -----------------------------------------------*/
@@ -23,7 +23,7 @@ void CAN_clk_gpio_init();
 void bxCAN_interrupts_enable();
 void bxCAN_interrupts_disable();
 
-// Заголовочники DSDL (uavcan namespace)
+// DSDL Headers (uavcan namespace)
 #include "uavcan/node/Heartbeat_1_0.h"
 #include "modrob/sensor_module/sensor_data_0_1.h"
 
@@ -31,7 +31,6 @@ constexpr uint32_t USEC_IN_SEC = 1000000; // секунда выраженная
 
 bool publish_heartbeat(const uavcan_node_Heartbeat_1_0 *const hb, uint64_t micros);
 bool publish_sensor_data(const modrob_sensor_module_sensor_data_0_1 *const sdata, uint64_t micros);
-
 void process_received_transfer(const CanardRxTransfer *transfer)
 {
 
@@ -63,6 +62,7 @@ int main(void)
     usart2::DMA_UART_LinkageInit();
     timer2::tim2_setup();
     timer2::tim2_start();
+    srand(HAL_GetTick());
 
     node.bxCAN_init(HAL_RCC_GetPCLK1Freq(), 1000000,
                     bxCAN_interrupts_enable,
@@ -92,6 +92,7 @@ int main(void)
     modrob_sensor_module_sensor_data_0_1 sensor_data = {};
     sensor_data.cur_pos[0] = 0.2;
     sensor_data.cur_pos[1] = 0.3;
+    // Формируем статические данные о подвижных препятствиях
     sensor_data.obstacles.count = 10;
     sensor_data.obstacles.elements[0].obst_pos[0] = 1;
     sensor_data.obstacles.elements[0].obst_pos[1] = 1;
@@ -153,8 +154,9 @@ int main(void)
     sensor_data.obstacles.elements[9].obst_vel[1] = -0.2;
     sensor_data.obstacles.elements[9].radius = 0.4;
 
-    sensor_data.scanX.count = 100;
-    sensor_data.scanY.count = 100;
+    sensor_data.scanX.count = 36;
+    sensor_data.scanY.count = 36;
+    // Набор точек скана со статическими данными
     float scan_x[] = {2, 1.99606, 1.98425, 1.96461, 1.93723, 1.90221, 1.85969, 1.80984, 1.75286, 1.68896,
                       1.61841, 1.54147, 1.45846, 1.3697, 1.27554, 1.17634, 1.07251, 0.964456, 0.852596, 0.737374,
                       0.619245, 0.498675, 0.376139, 0.252119, 0.127106, 0.00159183, -0.123929, -0.248961, -0.373011, -0.495591,
@@ -173,12 +175,14 @@ int main(void)
                       -1.6864, -1.75055, -1.8078, -1.85793, -1.90073, -1.93604, -1.96371, -1.98364, -1.99575, -1.99999, -1.99635, -1.98484,
                       -1.9655, -1.93841, -1.90368, -1.86145, -1.81187, -1.75516, -1.69152, -1.62121, -1.54452, -1.46173, -1.37318, -1.27922,
                       -1.18021, -1.07655, -0.968645, -0.856922, -0.74182, -0.623794, -0.503308, -0.380838, -0.256867, -0.131883};
-    std::copy(scan_x, scan_x + 100, sensor_data.scanX.elements);
-    std::copy(scan_y, scan_y + 100, sensor_data.scanY.elements);
+    // std::copy(scan_x, scan_x + 36, sensor_data.scanX.elements);
+    // std::copy(scan_y, scan_y + 36, sensor_data.scanY.elements);
+    float rand_val;
     while (1)
     {
-        hb.uptime = timer2::get_micros() / USEC_IN_SEC;
 
+        hb.uptime = timer2::get_micros() / USEC_IN_SEC;
+        // usart2::UART_send_float(val, true);
         if (timer2::get_micros() >= next_1_hz_timestep)
         {
             next_1_hz_timestep += USEC_IN_SEC;
@@ -188,9 +192,19 @@ int main(void)
 
         if (timer2::get_micros() >= next_20_hz_timestep)
         {
+            // генерируем набор случайных координат в диапазоне 0.5...3 метра
+            for (size_t i = 0; i < sensor_data.scanX.count; i++)
+            {
+                rand_val = (rand() % 250 + 50) / 100.0;
+                sensor_data.scanX.elements[i] = rand_val;
+            }
+            for (size_t j = 0; j < sensor_data.scanY.count; j++)
+            {
+                rand_val = (rand() % 250 + 50) / 100.0;
+                sensor_data.scanY.elements[j] = rand_val;
+            }
             next_20_hz_timestep += 50000;
             publish_sensor_data(&sensor_data, timer2::get_micros());
-            usart2::UART_send_string("OPA!");
         }
         node.send_transmission_queue(timer2::get_micros());
         node.receive_transfers(&process_received_transfer);
@@ -198,6 +212,7 @@ int main(void)
     /* USER CODE END 3 */
 }
 
+// Публикация сенсорных данных на шину
 bool publish_sensor_data(const modrob_sensor_module_sensor_data_0_1 *const sdata, uint64_t micros)
 {
     static CanardTransferID transfer_id = 0;

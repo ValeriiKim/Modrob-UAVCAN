@@ -19,12 +19,11 @@
 
 // Заголовочники DSDL (uavcan namespace)
 #include "uavcan/node/Heartbeat_1_0.h"
+#include "modrob/transport_module/cognition_setpoint_0_1.h"
 
 // Макросы для дебага
 #define GREEN_LED_ON SET_BIT(GPIOC->BSRR, GPIO_BSRR_BR13);
 #define GREEN_LED_OFF SET_BIT(GPIOC->BSRR, GPIO_BSRR_BS13);
-#define TESTPIN_ON SET_BIT(GPIOA->BSRR, GPIO_BSRR_BR9);
-#define TESTPIN_OFF SET_BIT(GPIOA->BSRR, GPIO_BSRR_BS9);
 
 constexpr uint32_t USEC_IN_SEC = 1000000; // секунда выраженная в мкс
 
@@ -39,11 +38,23 @@ void process_received_transfer(const CanardRxTransfer *transfer)
 		uavcan_node_Heartbeat_1_0 hb_remote;
 		size_t inout_buffer_size_bytes = transfer->payload_size;
 		int res = uavcan_node_Heartbeat_1_0_deserialize_(&hb_remote, (uint8_t *)(transfer->payload), &inout_buffer_size_bytes);
-	
+
 		// usart2::usart_send_int(hb_remote.vendor_specific_status_code, true);
 		if (res < 0)
 		{
 			// usart2::usart_send_string("HERE!\n");
+		}
+	}
+	if ((transfer->metadata.transfer_kind == CanardTransferKindMessage) &&
+		(transfer->metadata.port_id == 10))
+	{
+		modrob_transport_module_cognition_setpoint_0_1 setpoint;
+		size_t inout_buffer_size_bytes = transfer->payload_size;
+		int res = modrob_transport_module_cognition_setpoint_0_1_deserialize_(&setpoint, (uint8_t *)(transfer->payload), &inout_buffer_size_bytes);
+		if (res >= 0)
+		{
+			LL_GPIO_SetOutputPin(GPIOA, LL_GPIO_PIN_9);
+			LL_GPIO_ResetOutputPin(GPIOA, LL_GPIO_PIN_9);
 		}
 	}
 }
@@ -64,8 +75,7 @@ int main()
 					board::bxCAN_interrupts_disable);
 	usart2::usart_send_string("bxCAN controller initialized and started\n");
 
-	GREEN_LED_OFF;
-	TESTPIN_OFF;
+	LL_GPIO_ResetOutputPin(GPIOA, LL_GPIO_PIN_9);
 
 	uint64_t prev_time = timer2::get_micros();
 
@@ -84,6 +94,12 @@ int main()
 					  CANARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
 					  &heartbeat_subscription);
 
+	static CanardRxSubscription setpoint_subscription;
+	node.rx_subscribe(CanardTransferKindMessage,
+					  10,
+					  modrob_transport_module_cognition_setpoint_0_1_EXTENT_BYTES_,
+					  CANARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
+					  &setpoint_subscription);
 	while (1)
 	{
 		hb.uptime = timer2::get_micros() / USEC_IN_SEC;
@@ -91,8 +107,10 @@ int main()
 		if ((timer2::get_micros() - prev_time) > USEC_IN_SEC)
 		{
 			// usart2::usart_send_int(node.get_realtime(), true);
+			// LL_GPIO_SetOutputPin(GPIOA, LL_GPIO_PIN_9);
 			bool res = publish_heartbeat(&hb, timer2::get_micros());
 			prev_time = timer2::get_micros();
+			// LL_GPIO_ResetOutputPin(GPIOA, LL_GPIO_PIN_9);
 		}
 		node.send_transmission_queue(timer2::get_micros());
 		node.receive_transfers(&process_received_transfer);
@@ -148,10 +166,8 @@ extern "C"
 	/* С каждым прерыванием увеличиваем счётчик переполнений */
 	void TIM2_IRQHandler()
 	{
-		GREEN_LED_ON;
 		timer2::tim2_upcount();
 		node.upcount_realtime();
-		GREEN_LED_OFF;
 	}
 }
 

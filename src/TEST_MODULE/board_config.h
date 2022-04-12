@@ -106,7 +106,7 @@ namespace board
 		LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
 		/**/
-		GPIO_InitStruct.Pin = LL_GPIO_PIN_4;
+		GPIO_InitStruct.Pin = LL_GPIO_PIN_9;
 		GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
 		GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
 		GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;

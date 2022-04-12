@@ -1,5 +1,5 @@
 #define NUNAVUT_ASSERT(x) assert(x) // объявление макроса для работы serialization.h для DSDL
-// Главная тестовая прошивка для отладки различной периферии и протокола UAVCAN
+// Прошивка когнитивного субмодуля транспортного модуля
 
 // Драйверы микроконтроллера
 #include "main.hpp"
@@ -17,7 +17,7 @@
 #include "math.h"
 #include "algorithm"
 
-// Заголовочники DSDL (uavcan namespace)
+// DSDL Headers (uavcan namespace)
 #include "uavcan/node/Heartbeat_1_0.h"
 #include "modrob/transport_module/cognition_setpoint_0_1.h"
 #include "modrob/sensor_module/sensor_data_0_1.h"
@@ -28,6 +28,8 @@ void bxCAN_interrupts_enable();
 void bxCAN_interrupts_disable();
 
 constexpr uint32_t USEC_IN_SEC = 1000000; // секунда выраженная в мкс
+float Vx = 0, Vy = 0;
+bool get_new_sensor_data = false;
 
 O1HeapInstance *o1heap_ins;
 static constexpr size_t HEAP_SIZE = 51200;
@@ -63,6 +65,16 @@ struct CAN_message
 	}
 };
 
+/** Функция, которая для каждой точки статического препятствия проверяет, приведёт ли эта
+ * точка к столкновению с роботом на следующем временном шаге, на котором положение робота
+ * будет иметь координаты x и y
+ * @param points_x массив координат X точек
+ * @param points_y массив координат Y точек
+ * @param count количество точек скана
+ * @param x координата X робота на следующем временном шаге
+ * @param y координата Y робота на следующем временном шаге
+ * @return true, если хотя бы одна точка вызовет столкновение, false - ни одна точка не вызовет столкновение
+ **/
 inline bool static_collision(float points_x[], float points_y[], size_t count, float x, float y)
 {
 	bool result;
@@ -71,6 +83,7 @@ inline bool static_collision(float points_x[], float points_y[], size_t count, f
 		if (sqrtf(powf((points_x[i] - x), 2) + powf((points_y[i] - y), 2)) <= 0.45)
 		{
 			result = true;
+			break;
 		}
 		else
 		{
@@ -80,19 +93,34 @@ inline bool static_collision(float points_x[], float points_y[], size_t count, f
 	return result;
 }
 
-void Navigation(modrob_sensor_module_sensor_data_0_1 *sdata)
+/** Функция навигации транспортного модуля, которая копирует содержание функции Navigation
+ * в блоке TM local planner блока Transport module модели Simulink с названием navigation_robot3_5. 
+ * Для движения к целевой точке используется линейный регулятор, для объезда подвижных препятствий 
+ * применяется алгоритм Velocity Obstacles (VO).
+ * @param sdata указатель на сенсорные данные, получаемые от сенсорного модуля
+ * @param Vx проекция текущей скорости робота на ось X
+ * @param Vy проекция текущей скорости робота на ось Y
+ **/
+void Navigation(modrob_sensor_module_sensor_data_0_1 *sdata, float &Vx, float &Vy)
 {
 	float goal_x = 3;
 	float goal_y = 0;
 	float radi_r = 0.15;
 	float clearance = 0.05;
+	float ax = 4.65, ay = 4.65;
+	float dt = 0.1;
 	float Xa = sdata->cur_pos[0];
 	float Ya = sdata->cur_pos[1];
-	float Vx = 0, Vy = 0;
+	// float Vx = 0, Vy = 0;
 	float X_next, Y_next;
 
 	float Vdesx;
 	float Vdesy;
+	float Vrx = 0, Vry = 0;
+	float Vxmin;
+	float Vxmax;
+	float Vymin;
+	float Vymax;
 
 	float *theta_left = new float[sdata->obstacles.count];
 	float *theta_right = new float[sdata->obstacles.count];
@@ -130,23 +158,23 @@ void Navigation(modrob_sensor_module_sensor_data_0_1 *sdata)
 	float gamma = atan2f(goal_y - Ya, goal_x - Xa);
 	Vdesx = 0.7 * L * cosf(gamma);
 	Vdesy = 0.7 * L * sinf(gamma);
+	Vxmin = Vrx - ax * dt;
+	Vxmax = Vrx + ax * dt;
+	Vymin = Vry - ay * dt;
+	Vymax = Vry + ay * dt;
 	// LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_3);
-
 	float theta_VAB = 0;
-	float Vxmin = -0.5;
-	float Vxmax = 0.5;
-	float Vymin = -0.5;
-	float Vymax = 0.5;
-	float Vx_RV[7], Vy_RV[7];
-	float numV = 7;
-	float step = (Vxmax - Vxmin) / (numV - 1);
+	float numV = 12;
+	float Vx_RV[12], Vy_RV[12];
+	float step_x = (Vxmax - Vxmin) / (numV - 1);
+	float step_y = (Vymax - Vymin) / (numV - 1);
 	for (size_t n = 0; n < numV; n++)
 	{
-		Vx_RV[n] = Vxmin + n * step;
+		Vx_RV[n] = Vxmin + n * step_x;
 	}
 	for (size_t n = 0; n < numV; n++)
 	{
-		Vy_RV[n] = Vymin + n * step;
+		Vy_RV[n] = Vymin + n * step_y;
 	}
 	uint16_t num_collision_vels = 0;
 	// LL_GPIO_SetOutputPin(GPIOC, LL_GPIO_PIN_3);
@@ -249,6 +277,7 @@ bool publish_heartbeat(CanardInstance *const canard_ins, CanardTxQueue *tx_queue
 	return result;
 }
 
+// Функция для отправки задающих воздействий на вторую шину CAN для субмодулей
 bool publish_setpoint(CanardInstance *const canard_ins,
 					  CanardTxQueue *tx_queue,
 					  const modrob_transport_module_cognition_setpoint_0_1 *const setp,
@@ -288,6 +317,7 @@ bool publish_setpoint(CanardInstance *const canard_ins,
 	return result;
 }
 
+// Общая функция обработки входящих canard сообщений 
 void process_received_transfer(const CanardRxTransfer *transfer)
 {
 
@@ -309,22 +339,15 @@ void process_received_transfer(const CanardRxTransfer *transfer)
 		(transfer->metadata.port_id == 150))
 	{
 		LL_GPIO_SetOutputPin(GPIOC, LL_GPIO_PIN_3);
-
 		modrob_sensor_module_sensor_data_0_1 sensor_data;
 		size_t inout_buffer_size_bytes = transfer->payload_size;
 		int res = modrob_sensor_module_sensor_data_0_1_deserialize_(&sensor_data, (uint8_t *)(transfer->payload), &inout_buffer_size_bytes);
-		// UART_send_float(sensor_data.obstacles.count, true);
-		UART_send_float(sensor_data.scanX.count, true);
-		if (sensor_data.obstacles.elements[2].radius == 0.4)
-		{
-		}
-
-		Navigation(&sensor_data);
+		Navigation(&sensor_data, Vx, Vy);
+		get_new_sensor_data = true;
 		if (res < 0)
 		{
 			UART_send_string("HERE!\n");
 		}
-		
 		LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_3);
 	}
 }
@@ -349,6 +372,7 @@ void send_transmission_queue(CanardInstance *const canard_ins, CanardTxQueue *tx
 	}
 }
 
+// Функция обработки входящих CAN фреймов, поступающих по первой шине
 bool receive_transfers_can1(CanardInstance *const canard_ins)
 {
 	CanardRxTransfer transfer;
@@ -381,6 +405,7 @@ bool receive_transfers_can1(CanardInstance *const canard_ins)
 	return true;
 }
 
+// Функция обработки входящих CAN фреймов, поступающих по второй шине
 bool receive_transfers_can2(CanardInstance *const canard_ins)
 {
 	CanardRxTransfer transfer;
@@ -434,12 +459,12 @@ int main()
 	res = bxCANConfigure(0, can_timings, false);
 	if (!res)
 	{
-		// Can't configure bxCAN!
+		// Can't configure bxCAN1!
 	}
 	res = bxCANConfigure(1, can_timings, false);
 	if (!res)
 	{
-		// Can't configure bxCAN!
+		// Can't configure bxCAN2!
 	}
 	bxCAN_interrupts_enable();
 	o1heap_ins = o1heapInit(_base, HEAP_SIZE);
@@ -466,62 +491,16 @@ int main()
 		};
 
 	modrob_transport_module_cognition_setpoint_0_1 setpoint = {};
-	setpoint.angle.count = 1;
-	setpoint.angle.elements[0] = 10.0;
-	setpoint.angle.elements[1] = 20;
-	setpoint.angle.elements[2] = 30;
-	setpoint.angle.elements[3] = 40;
-	setpoint.angular_velocity.count = 1;
-	setpoint.angular_velocity.elements[0] = 1;
-	setpoint.angular_velocity.elements[1] = 2;
-	setpoint.angular_velocity.elements[2] = 4;
-	setpoint.angular_velocity.elements[3] = -1;
-
-	// modrob_sensor_module_sensor_data_0_1 sensor_data = {};
-	// float scan_x[] = {1.0, 10.0, 11.2, 23.2, 3.4,
-	// 				  1.0, 10.0, 11.2, 23.2, 3.4,
-	// 				  1.0, 10.0, 11.2, 23.2, 3.4,
-	// 				  1.0, 10.0, 11.2, 23.2, 3.4,
-	// 				  1.0, 10.0, 11.2, 23.2, 3.4,
-	// 				  1.0, 10.0, 11.2, 23.2, 3.4,
-	// 				  1.0, 10.0, 11.2, 23.2, 3.4,
-	// 				  1.0, 10.0, 11.2, 23.2, 3.4,
-	// 				  1.0, 10.0, 11.2, 23.2, 3.4,
-	// 				  1.0, 10.0, 11.2, 23.2, 3.4};
-	// std::copy(scan_x, scan_x + 50, sensor_data.scanX.elements);
-	// sensor_data.cur_pos[0] = 0.2;
-	// sensor_data.cur_pos[1] = 0.3;
-	// sensor_data.obstacles.count = 10;
-	// sensor_data.obstacles.elements[0].obst_pos[0] = 1;
-	// sensor_data.obstacles.elements[0].obst_pos[1] = 1;
-	// sensor_data.obstacles.elements[0].obst_vel[0] = -0.3;
-	// sensor_data.obstacles.elements[0].obst_vel[1] = -0.2;
-	// sensor_data.obstacles.elements[0].radius = 0.4;
-
-	// sensor_data.obstacles.elements[1].obst_pos[0] = 1.5;
-	// sensor_data.obstacles.elements[1].obst_pos[1] = 1;
-	// sensor_data.obstacles.elements[1].obst_vel[0] = -0.6;
-	// sensor_data.obstacles.elements[1].obst_vel[1] = -0.2;
-	// sensor_data.obstacles.elements[1].radius = 0.3;
-
-	// sensor_data.obstacles.elements[2].obst_pos[0] = 1;
-	// sensor_data.obstacles.elements[2].obst_pos[1] = -1;
-	// sensor_data.obstacles.elements[2].obst_vel[0] = -0.2;
-	// sensor_data.obstacles.elements[2].obst_vel[1] = -0.2;
-	// sensor_data.obstacles.elements[2].radius = 0.4;
-
-	// sensor_data.obstacles.elements[3].obst_pos[0] = 1.5;
-	// sensor_data.obstacles.elements[3].obst_pos[1] = 1.5;
-	// sensor_data.obstacles.elements[3].obst_vel[0] = -0.5;
-	// sensor_data.obstacles.elements[3].obst_vel[1] = -0.2;
-	// sensor_data.obstacles.elements[3].radius = 0.2;
-
-	// sensor_data.obstacles.elements[4].obst_pos[0] = 0.2;
-	// sensor_data.obstacles.elements[4].obst_pos[1] = 1;
-	// sensor_data.obstacles.elements[4].obst_vel[0] = -0.3;
-	// sensor_data.obstacles.elements[4].obst_vel[1] = -0.2;
-	// sensor_data.obstacles.elements[4].radius = 0.4;
-	// bool res2 = static_collision(sensor_data.scanX.elements, 5);
+	setpoint.angle.count = 4;
+	setpoint.angle.elements[0] = 0.0;
+	setpoint.angle.elements[1] = 0.0;
+	setpoint.angle.elements[2] = 0.0;
+	setpoint.angle.elements[3] = 0.0;
+	setpoint.angular_velocity.count = 4;
+	setpoint.angular_velocity.elements[0] = 0.0;
+	setpoint.angular_velocity.elements[1] = 0.0;
+	setpoint.angular_velocity.elements[2] = 0.0;
+	setpoint.angular_velocity.elements[3] = 0.0;
 
 	static CanardRxSubscription heartbeat_subscription;
 	canardRxSubscribe(&canard_ins, CanardTransferKindMessage,
@@ -529,6 +508,7 @@ int main()
 					  12,
 					  CANARD_DEFAULT_TRANSFER_ID_TIMEOUT_USEC,
 					  &heartbeat_subscription);
+
 	static CanardRxSubscription sensor_data_subscription;
 	canardRxSubscribe(&canard_ins, CanardTransferKindMessage,
 					  150,
@@ -538,33 +518,33 @@ int main()
 
 	while (1)
 	{
-		// HAL_Delay(1000);
-		// UART_send_string("abcdef");
 
-		// HAL_UART_Transmit_DMA(&huart2, str, sizeof(str) - 1);
 		hb.uptime = timer2::get_micros() / USEC_IN_SEC;
 
 		if (timer2::get_micros() >= next_1_hz_timestep)
 		{
 			next_1_hz_timestep += USEC_IN_SEC;
-			// usart2::usart_send_int(node.get_realtime(), true);
 			publish_heartbeat(&canard_ins, &tx_queue_can1, &hb, timer2::get_micros());
-			// publish_heartbeat(&canard_ins, &tx_queue_can2, &hb, timer2::get_micros());
-			prev_time = timer2::get_micros();
 		}
-		// bool res2 = static_collision(sensor_data.scanX.elements, 50);
-		if (timer2::get_micros() >= next_10_hz_timestep)
+		// if (timer2::get_micros() >= next_10_hz_timestep)
+		// {
+		// 	next_10_hz_timestep += 100000;
+		// 	publish_setpoint(&canard_ins, &tx_queue_can2, &setpoint, timer2::get_micros());
+		// }
+		if (get_new_sensor_data)
 		{
-			next_10_hz_timestep += 100000;
+			setpoint.angular_velocity.elements[0] = 25*Vy;
+			setpoint.angular_velocity.elements[1] = -25*Vx;
+			setpoint.angular_velocity.elements[2] = -25*Vy;
+			setpoint.angular_velocity.elements[3] = 25*Vx;
 			publish_setpoint(&canard_ins, &tx_queue_can2, &setpoint, timer2::get_micros());
+			get_new_sensor_data = false;
 		}
 
 		send_transmission_queue(&canard_ins, &tx_queue_can1, 0, timer2::get_micros());
 		send_transmission_queue(&canard_ins, &tx_queue_can2, 1, timer2::get_micros());
 		receive_transfers_can1(&canard_ins);
 		receive_transfers_can2(&canard_ins);
-		// node.send_transmission_queue(timer2::get_micros());
-		// node.receive_transfers(&process_received_transfer);
 	}
 	return 0;
 }
