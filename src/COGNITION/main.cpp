@@ -20,7 +20,8 @@
 // DSDL Headers (uavcan namespace)
 #include "uavcan/node/Heartbeat_1_0.h"
 #include "modrob/transport_module/cognition_setpoint_0_1.h"
-#include "modrob/sensor_module/sensor_data_0_1.h"
+// #include "modrob/sensor_module/sensor_data_0_1.h"
+#include "modrob/sensor_module/sensor_data_0_2.h"
 
 void SystemClock_Config(void);
 void CAN_clk_gpio_init();
@@ -32,7 +33,7 @@ float Vx = 0, Vy = 0;
 bool get_new_sensor_data = false;
 
 O1HeapInstance *o1heap_ins;
-static constexpr size_t HEAP_SIZE = 51200;
+static constexpr size_t HEAP_SIZE = 51200; // 51200
 uint8_t _base[HEAP_SIZE] __attribute__((aligned(O1HEAP_ALIGNMENT))); // Create pointer to the memory arena for the HEAP
 
 void *memAllocate(CanardInstance *const ins, const size_t amount)
@@ -93,6 +94,63 @@ inline bool static_collision(float points_x[], float points_y[], size_t count, f
 	return result;
 }
 
+/** Функция, которая для каждого отрезка прямой статического препятствия проверяет, приведёт ли этот
+ * сегмент к столкновению с роботом на следующем временном шаге, на котором положение робота
+ * будет иметь координаты x и y
+ * @param points_x массив координат X точек
+ * @param points_y массив координат Y точек
+ * @param count количество точек скана
+ * @param x координата X робота на следующем временном шаге
+ * @param y координата Y робота на следующем временном шаге
+ * @return true, если хотя бы один сегмент вызовет столкновение, false - ни один сегмент не вызовет столкновение
+ **/
+inline bool static_segment_collision(modrob_sensor_module_segment_params_0_1 segments[], size_t count, float x, float y, float safe_dist_squared)
+{
+	bool result;
+	float segment_x, segment_y;
+	float px_seg, py_seg;
+	float dot, seg_len_squared;
+	float param = -1;
+	float xx, yy;
+	for (size_t i = 0; i < count; i++)
+	{
+		segment_x = segments[i].x2 - segments[i].x1;
+		segment_y = segments[i].y2 - segments[i].y1;
+		px_seg = x - segments[i].x1;
+		py_seg = y - segments[i].y1;
+		dot = px_seg*segment_x + py_seg*segment_y;
+		seg_len_squared = powf(segment_x, 2) + powf(segment_y, 2);
+		param = dot/seg_len_squared;
+		if (param < 0)
+		{
+			xx = segments[i].x1;
+			yy = segments[i].y1;
+		}
+		else if (param > 1)
+		{
+			xx = segments[i].x2;
+			yy = segments[i].y2;
+		}
+		else
+		{
+			xx = segments[i].x1 + param*segment_x;
+			yy = segments[i].y1 + param*segment_y;
+		}
+
+		float min_dist_squared = powf(xx-x, 2) + powf(yy-y, 2);
+		if (min_dist_squared <= safe_dist_squared)
+		{
+			result = true;
+			// break;
+		}
+		else
+		{
+			result = false;
+		}
+	}
+	return result;
+}
+
 /** Функция навигации транспортного модуля, которая копирует содержание функции Navigation
  * в блоке TM local planner блока Transport module модели Simulink с названием navigation_robot3_5. 
  * Для движения к целевой точке используется линейный регулятор, для объезда подвижных препятствий 
@@ -101,7 +159,7 @@ inline bool static_collision(float points_x[], float points_y[], size_t count, f
  * @param Vx проекция текущей скорости робота на ось X
  * @param Vy проекция текущей скорости робота на ось Y
  **/
-void Navigation(modrob_sensor_module_sensor_data_0_1 *sdata, float &Vx, float &Vy)
+void Navigation(modrob_sensor_module_sensor_data_0_2 *sdata, float &Vx, float &Vy)
 {
 	float goal_x = 3;
 	float goal_y = 0;
@@ -113,6 +171,8 @@ void Navigation(modrob_sensor_module_sensor_data_0_1 *sdata, float &Vx, float &V
 	float Ya = sdata->cur_pos[1];
 	// float Vx = 0, Vy = 0;
 	float X_next, Y_next;
+	float safe_dist = 0.45; // robot_radius (0.3 m) + 0.15 m
+	float safe_dist_squared = powf(safe_dist, 2);
 
 	float Vdesx;
 	float Vdesy;
@@ -164,8 +224,8 @@ void Navigation(modrob_sensor_module_sensor_data_0_1 *sdata, float &Vx, float &V
 	Vymax = Vry + ay * dt;
 	// LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_3);
 	float theta_VAB = 0;
-	float numV = 12;
-	float Vx_RV[12], Vy_RV[12];
+	float numV = 10;
+	float Vx_RV[10], Vy_RV[10];
 	float step_x = (Vxmax - Vxmin) / (numV - 1);
 	float step_y = (Vymax - Vymin) / (numV - 1);
 	for (size_t n = 0; n < numV; n++)
@@ -197,7 +257,7 @@ void Navigation(modrob_sensor_module_sensor_data_0_1 *sdata, float &Vx, float &V
 			// {
 			X_next = Xa + Vx_RV[i] * 0.2;
 			Y_next = Ya + Vy_RV[j] * 0.2;
-			bool check = static_collision(sdata->scanX.elements, sdata->scanY.elements, sdata->scanX.count, X_next, Y_next);
+			bool check = static_segment_collision(sdata->segments.elements, sdata->segments.count, X_next, Y_next, safe_dist_squared);
 			if (check)
 			{
 				Vx_RV[i] = 999;
@@ -211,7 +271,7 @@ void Navigation(modrob_sensor_module_sensor_data_0_1 *sdata, float &Vx, float &V
 	delete[] theta_right;
 	// LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_3);
 	float dV;
-	if (num_collision_vels == 100)
+	if (num_collision_vels == numV*numV)
 	{
 		Vx = 0;
 		Vy = 0;
@@ -339,9 +399,9 @@ void process_received_transfer(const CanardRxTransfer *transfer)
 		(transfer->metadata.port_id == 150))
 	{
 		LL_GPIO_SetOutputPin(GPIOC, LL_GPIO_PIN_3);
-		modrob_sensor_module_sensor_data_0_1 sensor_data;
+		modrob_sensor_module_sensor_data_0_2 sensor_data;
 		size_t inout_buffer_size_bytes = transfer->payload_size;
-		int res = modrob_sensor_module_sensor_data_0_1_deserialize_(&sensor_data, (uint8_t *)(transfer->payload), &inout_buffer_size_bytes);
+		int res = modrob_sensor_module_sensor_data_0_2_deserialize_(&sensor_data, (uint8_t *)(transfer->payload), &inout_buffer_size_bytes);
 		Navigation(&sensor_data, Vx, Vy);
 		get_new_sensor_data = true;
 		if (res < 0)
@@ -469,11 +529,11 @@ int main()
 	bxCAN_interrupts_enable();
 	o1heap_ins = o1heapInit(_base, HEAP_SIZE);
 	CanardInstance canard_ins = canardInit(&memAllocate, &memFree);
-	CanardTxQueue tx_queue_can1 = canardTxInit(100, CANARD_MTU_CAN_CLASSIC);
-	CanardTxQueue tx_queue_can2 = canardTxInit(100, CANARD_MTU_CAN_CLASSIC);
+	CanardTxQueue tx_queue_can1 = canardTxInit(700, CANARD_MTU_CAN_CLASSIC);
+	CanardTxQueue tx_queue_can2 = canardTxInit(700, CANARD_MTU_CAN_CLASSIC);
 	canard_ins.node_id = MODULE_ID; // Set equal to MODULE_ID which is edited in platformio.ini
-	q_init(&can1rx_queue, sizeof(CAN_message), 128, FIFO, true);
-	q_init(&can2rx_queue, sizeof(CAN_message), 128, FIFO, true);
+	q_init(&can1rx_queue, sizeof(CAN_message), 512, FIFO, true);
+	q_init(&can2rx_queue, sizeof(CAN_message), 256, FIFO, true);
 
 	// usart2::UART_send_string("bxCAN controller initialized and started\n");
 
@@ -533,10 +593,10 @@ int main()
 		// }
 		if (get_new_sensor_data)
 		{
-			setpoint.angular_velocity.elements[0] = 25*Vy;
-			setpoint.angular_velocity.elements[1] = -25*Vx;
-			setpoint.angular_velocity.elements[2] = -25*Vy;
-			setpoint.angular_velocity.elements[3] = 25*Vx;
+			setpoint.angular_velocity.elements[0] = 0.1*(Vx - Vy);
+			setpoint.angular_velocity.elements[1] = 0.1*(Vx + Vy);
+			setpoint.angular_velocity.elements[2] = 0.1*(Vx + Vy);
+			setpoint.angular_velocity.elements[3] = 0.1*(Vx - Vy);
 			publish_setpoint(&canard_ins, &tx_queue_can2, &setpoint, timer2::get_micros());
 			get_new_sensor_data = false;
 		}

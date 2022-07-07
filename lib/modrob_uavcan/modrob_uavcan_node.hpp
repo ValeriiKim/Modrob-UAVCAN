@@ -225,7 +225,7 @@ public:
 
 private:
     // TODO: сделать установку HEAP_SIZE в файле platformio.ini для каждой прошивки отдельно  
-    static constexpr size_t HEAP_SIZE = 32768; //4096 для тестового субмодуля
+    static constexpr size_t HEAP_SIZE = 42000; //4096 для тестового субмодуля
     uint8_t _base[HEAP_SIZE] __attribute__((aligned(O1HEAP_ALIGNMENT))); // Create pointer to the memory arena for the HEAP
     Queue_t canrx_queue;                                                 // queue for recieved CAN frames
     CanardInstance canard_ins;
