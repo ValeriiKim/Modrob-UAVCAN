@@ -1,5 +1,4 @@
 # ModRob Framework
-For now installation instructions only in russian language (the english version will be later...)
 ## Основные настройки
 Проект базируется на следующих основных сущностях:
   * Фреймворк [PlarformIO](https://platformio.org/) для удобства работы с широким спектром микроконтроллеров различных производителей (мы преимущественно используем контроллры семейства STM32).
